@@ -10,6 +10,9 @@ const TrxSkDinasKabkota = require("./TrxSkDinasKabkota");
 const TrxSkDinasProvinsi = require("./TrxSkDinasProvinsi");
 const TrxBaDinasKabkota = require("./TrxBaDinasKabkota");
 const TrxLogKeputusan = require("./TrxLogKeputusan");
+const RankDatabase = require("./rank_database");
+const RefPerguruanTinggi = require("./RefPerguruanTinggi");
+const RefProgramStudi = require("./RefProgramStudi"); 
 const { sequelize } = require("../core/db_config");
 
 // Buat object models supaya gampang akses
@@ -26,6 +29,9 @@ const models = {
   TrxSkDinasProvinsi,
   TrxBaDinasKabkota,
   TrxLogKeputusan,
+  RankDatabase,
+  RefPerguruanTinggi,
+  RefProgramStudi,
   sequelize
 };
 

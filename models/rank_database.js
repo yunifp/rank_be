@@ -11,7 +11,7 @@ const TrxKeputusan = sequelize.define(
       allowNull: false,
     },
 
-    id_trx_beasis: {
+    id_trx_beasiswa: { // <--- PERBAIKAN DISINI (sebelumnya id_trx_beasis)
       type: DataTypes.INTEGER(11),
       allowNull: true,
     },
@@ -41,7 +41,7 @@ const TrxKeputusan = sequelize.define(
       allowNull: true,
     },
 
-    status_mundl: {
+    status_mundur: { 
       type: DataTypes.ENUM("Y", "N"),
       allowNull: true,
       defaultValue: "N",
