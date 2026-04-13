@@ -5,13 +5,15 @@ const {
   RankDatabase, 
   TrxPilihanProgramStudi, 
   RefProgramStudi,
-  RefPerguruanTinggi
+  RefPerguruanTinggi,
+  TrxBeasiswa // <-- IMPORT DITAMBAHKAN DI SINI
 } = require("../../../models");
 const { successResponse, errorResponse, failResponse } = require("../../../common/response");
 
 // Setup relasi untuk keperluan JOIN pencarian dan filter
 RankDatabase.belongsTo(RefPerguruanTinggi, { foreignKey: "id_pt", targetKey: "id_pt" });
 RankDatabase.belongsTo(RefProgramStudi, { foreignKey: "id_prodi", targetKey: "id_prodi" });
+RankDatabase.belongsTo(TrxBeasiswa, { foreignKey: "id_trx_beasiswa", targetKey: "id_trx_beasiswa" }); // <-- RELASI DITAMBAHKAN DI SINI
 
 exports.uploadDataRanking = async (req, res) => {
   try {
@@ -27,15 +29,52 @@ exports.uploadDataRanking = async (req, res) => {
       return failResponse(res, "Sheet tidak ditemukan di dalam file Excel");
     }
 
-    const dataToInsert = [];
+    const rawData = [];
+    const kodeList = [];
 
+    // 1. Baca data dari Excel (Kolom 1 sekarang adalah Kode Pendaftaran)
     worksheet.eachRow((row, rowNumber) => {
       if (rowNumber > 1) {
+        const kode = row.getCell(1).value?.toString().trim();
+        if (kode) {
+          kodeList.push(kode);
+          rawData.push({
+            kode_pendaftaran: kode,
+            nama: row.getCell(2).value?.toString().trim(),
+            nilai_akhir: parseFloat(row.getCell(3).value) || 0,
+            kluster: row.getCell(4).value?.toString().trim(),
+          });
+        }
+      }
+    });
+
+    if (rawData.length === 0) {
+      return failResponse(res, "Tidak ada data valid untuk diimport");
+    }
+
+    // 2. Cari id_trx_beasiswa berdasarkan kode_pendaftaran yang ada di Excel
+    const beasiswaData = await TrxBeasiswa.findAll({
+      where: { kode_pendaftaran: { [Op.in]: kodeList } },
+      attributes: ['id_trx_beasiswa', 'kode_pendaftaran'],
+      raw: true
+    });
+
+    // 3. Buat kamus (mapping) untuk mempercepat pencarian ID
+    const mapKodeToId = {};
+    beasiswaData.forEach(b => {
+      mapKodeToId[b.kode_pendaftaran] = b.id_trx_beasiswa;
+    });
+
+    // 4. Siapkan data yang akan diinsert ke RankDatabase menggunakan ID asli
+    const dataToInsert = [];
+    rawData.forEach(item => {
+      const idTrx = mapKodeToId[item.kode_pendaftaran];
+      if (idTrx) { // Hanya proses jika kode pendaftaran ditemukan di database
         dataToInsert.push({
-          id_trx_beasiswa: row.getCell(1).value,
-          nama: row.getCell(2).value?.toString().trim(),
-          nilai_akhir: parseFloat(row.getCell(3).value) || 0,
-          kluster: row.getCell(4).value?.toString().trim(),
+          id_trx_beasiswa: idTrx,
+          nama: item.nama,
+          nilai_akhir: item.nilai_akhir,
+          kluster: item.kluster,
           status_mundur: "N",
           timestamp: new Date()
         });
@@ -43,7 +82,7 @@ exports.uploadDataRanking = async (req, res) => {
     });
 
     if (dataToInsert.length === 0) {
-      return failResponse(res, "Tidak ada data valid untuk diimport");
+      return failResponse(res, "Kode Pendaftaran dari Excel tidak ada yang cocok dengan Database.");
     }
 
     await RankDatabase.bulkCreate(dataToInsert);
@@ -70,10 +109,11 @@ exports.prosesPerangkingan = async (req, res) => {
       sisaKuota[`${prodi.id_pt}-${prodi.id_prodi}`] = prodi.kuota;
     });
 
-    const kandidat = await RankDatabase.findAll({
+   const kandidat = await RankDatabase.findAll({
       where: { status_mundur: "N" },
       order: [
-        [sequelize.literal(`CASE WHEN kluster = 'Afirmasi' THEN 1 ELSE 2 END`), "ASC"],
+        // Ganti baris ini agar kebal terhadap huruf kecil/besar dan spasi
+        [sequelize.literal(`CASE WHEN LOWER(TRIM(kluster)) = 'afirmasi' THEN 1 ELSE 2 END`), "ASC"],
         ["nilai_akhir", "DESC"]
       ],
       transaction
@@ -153,13 +193,15 @@ exports.getHasilRanking = async (req, res) => {
     if (search) {
       whereClause[Op.or] = [
         { nama: { [Op.like]: `%${search}%` } },
-        { id_trx_beasiswa: { [Op.like]: `%${search}%` } },
+        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } }, // <-- Cari berdasar kode
         { '$RefPerguruanTinggi.nama_pt$': { [Op.like]: `%${search}%` } },
         { '$RefProgramStudi.nama_prodi$': { [Op.like]: `%${search}%` } }
       ];
     }
 
-    const includeOptions = [];
+    const includeOptions = [
+      { model: TrxBeasiswa, attributes: ['kode_pendaftaran'], required: false }
+    ];
 
     if (filterPt || search) {
       includeOptions.push({
@@ -197,6 +239,7 @@ exports.getHasilRanking = async (req, res) => {
 
     const formattedData = rows.map(row => ({
       ...row.toJSON(),
+      kode_pendaftaran: row.TrxBeasiswa ? row.TrxBeasiswa.kode_pendaftaran : "-",
       nama_pt: row.RefPerguruanTinggi ? row.RefPerguruanTinggi.nama_pt : "-",
       nama_prodi: row.RefProgramStudi ? row.RefProgramStudi.nama_prodi : "-"
     }));
@@ -227,13 +270,15 @@ exports.downloadHasilRankingExcel = async (req, res) => {
     if (search) {
       whereClause[Op.or] = [
         { nama: { [Op.like]: `%${search}%` } },
-        { id_trx_beasiswa: { [Op.like]: `%${search}%` } },
+        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } }, // <-- Cari berdasar kode
         { '$RefPerguruanTinggi.nama_pt$': { [Op.like]: `%${search}%` } },
         { '$RefProgramStudi.nama_prodi$': { [Op.like]: `%${search}%` } }
       ];
     }
 
-    const includeOptions = [];
+    const includeOptions = [
+      { model: TrxBeasiswa, attributes: ['kode_pendaftaran'], required: false }
+    ];
 
     if (filterPt || search) {
       includeOptions.push({
@@ -272,7 +317,7 @@ exports.downloadHasilRankingExcel = async (req, res) => {
 
     worksheet.columns = [
       { header: "No", key: "no", width: 5 },
-      { header: "ID Transaksi", key: "id_trx", width: 15 },
+      { header: "Kode Pendaftaran", key: "kode_pendaftaran", width: 25 }, // <-- Header Diubah
       { header: "Nama", key: "nama", width: 30 },
       { header: "Nilai Akhir", key: "nilai", width: 15 },
       { header: "Kluster", key: "kluster", width: 15 },
@@ -283,7 +328,7 @@ exports.downloadHasilRankingExcel = async (req, res) => {
     hasil.forEach((row, index) => {
       worksheet.addRow({
         no: index + 1,
-        id_trx: row.id_trx_beasiswa,
+        kode_pendaftaran: row.TrxBeasiswa ? row.TrxBeasiswa.kode_pendaftaran : "-", // <-- Value Diubah
         nama: row.nama,
         nilai: row.nilai_akhir,
         kluster: row.kluster,
@@ -365,7 +410,7 @@ exports.getAllDatabaseUpload = async (req, res) => {
     if (search) {
       whereClause[Op.or] = [
         { nama: { [Op.like]: `%${search}%` } },
-        { id_trx_beasiswa: { [Op.like]: `%${search}%` } },
+        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } }, // <-- Cari berdasar kode
         { '$RefPerguruanTinggi.nama_pt$': { [Op.like]: `%${search}%` } },
         { '$RefProgramStudi.nama_prodi$': { [Op.like]: `%${search}%` } }
       ];
@@ -375,7 +420,8 @@ exports.getAllDatabaseUpload = async (req, res) => {
       where: whereClause,
       include: [
         { model: RefPerguruanTinggi, attributes: ['nama_pt'], required: false },
-        { model: RefProgramStudi, attributes: ['nama_prodi'], required: false }
+        { model: RefProgramStudi, attributes: ['nama_prodi'], required: false },
+        { model: TrxBeasiswa, attributes: ['kode_pendaftaran'], required: false }
       ],
       limit: limit,
       offset: offset,
@@ -388,6 +434,7 @@ exports.getAllDatabaseUpload = async (req, res) => {
 
     const formattedData = rows.map(row => ({
       ...row.toJSON(),
+      kode_pendaftaran: row.TrxBeasiswa ? row.TrxBeasiswa.kode_pendaftaran : "-",
       nama_pt: row.RefPerguruanTinggi ? row.RefPerguruanTinggi.nama_pt : null,
       nama_prodi: row.RefProgramStudi ? row.RefProgramStudi.nama_prodi : null
     }));
@@ -452,12 +499,15 @@ exports.getCadanganRanking = async (req, res) => {
     if (search) {
       whereClause[Op.or] = [
         { nama: { [Op.like]: `%${search}%` } },
-        { id_trx_beasiswa: { [Op.like]: `%${search}%` } }
+        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } }
       ];
     }
 
     const { count, rows } = await RankDatabase.findAndCountAll({
       where: whereClause,
+      include: [
+        { model: TrxBeasiswa, attributes: ['kode_pendaftaran'], required: false }
+      ],
       limit: limit,
       offset: offset,
       order: [
@@ -466,8 +516,13 @@ exports.getCadanganRanking = async (req, res) => {
       ]
     });
 
+    const formattedData = rows.map(row => ({
+      ...row.toJSON(),
+      kode_pendaftaran: row.TrxBeasiswa ? row.TrxBeasiswa.kode_pendaftaran : "-",
+    }));
+
     return successResponse(res, "Berhasil memuat data cadangan", {
-      data: rows,
+      data: formattedData,
       totalData: count,
       currentPage: page,
       totalPages: Math.ceil(count / limit)
@@ -603,5 +658,54 @@ exports.getDashboardStats = async (req, res) => {
   } catch (error) {
     console.error("Error getDashboardStats:", error);
     return errorResponse(res, "Gagal memuat data statistik dashboard");
+  }
+};
+
+
+// ==========================================
+// Download Template Excel untuk Upload
+// ==========================================
+exports.downloadTemplateRanking = async (req, res) => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Template Upload Ranking");
+
+    // Definisi Kolom
+    worksheet.columns = [
+      { header: "Kode Pendaftaran", key: "kode", width: 25 },
+      { header: "Nama Lengkap", key: "nama", width: 35 },
+      { header: "Nilai Akhir", key: "nilai", width: 15 },
+      { header: "Kluster", key: "kluster", width: 20 },
+    ];
+
+    // Tambahkan 1 baris contoh (contoh cara pengisian)
+    worksheet.addRow({
+      kode: "2601000001",
+      nama: "Contoh Nama Peserta",
+      nilai: 85.50,
+      kluster: "Reguler" // atau "Afirmasi"
+    });
+
+    // Beri catatan agar baris pertama tidak dihapus
+    worksheet.addRow(["", "", "", ""]); // baris kosong jarak
+    const noteRow = worksheet.addRow(["CATATAN: Hapus baris 2 (contoh data) sebelum upload. Jangan ubah urutan header di baris 1."]);
+    worksheet.mergeCells(`A${noteRow.number}:D${noteRow.number}`);
+    noteRow.font = { italic: true, color: { argb: "FFFF0000" } };
+
+    // Styling Header
+    for (let i = 1; i <= 4; i++) {
+      const cell = worksheet.getRow(1).getCell(i);
+      cell.font = { bold: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE0F0FF" } };
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", "attachment; filename=Template_Upload_Ranking.xlsx");
+
+    await workbook.xlsx.write(res);
+    res.status(200).end();
+  } catch (error) {
+    console.error("Error download template:", error);
+    return errorResponse(res, "Gagal mendownload template Excel");
   }
 };

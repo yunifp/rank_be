@@ -13,7 +13,8 @@ const {
   updateStatusMundur,
   getCadanganRanking,
   getSisaKuota,
-  getDashboardStats
+  getDashboardStats,
+  downloadTemplateRanking
 } = require("../controller");
 const { uploadConfigs } = require("../../../common/middleware/upload_middleware");
 
@@ -22,6 +23,7 @@ router.post("/proses", prosesPerangkingan);
 router.get("/hasil", getHasilRanking);
 router.get("/cadangan", getCadanganRanking); 
 router.get("/download-hasil", downloadHasilRankingExcel);
+router.get("/download-template", downloadTemplateRanking);
 router.delete("/reset", resetDataRanking);
 router.get("/kuota", getSisaKuota);
 router.put("/clear", clearHasilRanking);

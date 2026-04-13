@@ -37,6 +37,13 @@ app.use(
   require("./features/persyaratan/route")
 );
 
+// Menambahkan route untuk fitur ranking
+app.use(
+  "/api/beasiswa/ranking",
+  checkAuthorization,
+  require("./features/ranking/route")
+);
+
 app.use(multerErrorHandler);
 
 module.exports = app;
