@@ -6,14 +6,13 @@ const {
   TrxPilihanProgramStudi, 
   RefProgramStudi,
   RefPerguruanTinggi,
-  TrxBeasiswa // <-- IMPORT DITAMBAHKAN DI SINI
+  TrxBeasiswa
 } = require("../../../models");
 const { successResponse, errorResponse, failResponse } = require("../../../common/response");
 
-// Setup relasi untuk keperluan JOIN pencarian dan filter
 RankDatabase.belongsTo(RefPerguruanTinggi, { foreignKey: "id_pt", targetKey: "id_pt" });
 RankDatabase.belongsTo(RefProgramStudi, { foreignKey: "id_prodi", targetKey: "id_prodi" });
-RankDatabase.belongsTo(TrxBeasiswa, { foreignKey: "id_trx_beasiswa", targetKey: "id_trx_beasiswa" }); // <-- RELASI DITAMBAHKAN DI SINI
+RankDatabase.belongsTo(TrxBeasiswa, { foreignKey: "id_trx_beasiswa", targetKey: "id_trx_beasiswa" });
 
 exports.uploadDataRanking = async (req, res) => {
   try {
@@ -32,7 +31,6 @@ exports.uploadDataRanking = async (req, res) => {
     const rawData = [];
     const kodeList = [];
 
-    // 1. Baca data dari Excel (Kolom 1 sekarang adalah Kode Pendaftaran)
     worksheet.eachRow((row, rowNumber) => {
       if (rowNumber > 1) {
         const kode = row.getCell(1).value?.toString().trim();
@@ -52,24 +50,21 @@ exports.uploadDataRanking = async (req, res) => {
       return failResponse(res, "Tidak ada data valid untuk diimport");
     }
 
-    // 2. Cari id_trx_beasiswa berdasarkan kode_pendaftaran yang ada di Excel
     const beasiswaData = await TrxBeasiswa.findAll({
       where: { kode_pendaftaran: { [Op.in]: kodeList } },
       attributes: ['id_trx_beasiswa', 'kode_pendaftaran'],
       raw: true
     });
 
-    // 3. Buat kamus (mapping) untuk mempercepat pencarian ID
     const mapKodeToId = {};
     beasiswaData.forEach(b => {
       mapKodeToId[b.kode_pendaftaran] = b.id_trx_beasiswa;
     });
 
-    // 4. Siapkan data yang akan diinsert ke RankDatabase menggunakan ID asli
     const dataToInsert = [];
     rawData.forEach(item => {
       const idTrx = mapKodeToId[item.kode_pendaftaran];
-      if (idTrx) { // Hanya proses jika kode pendaftaran ditemukan di database
+      if (idTrx) {
         dataToInsert.push({
           id_trx_beasiswa: idTrx,
           nama: item.nama,
@@ -112,7 +107,6 @@ exports.prosesPerangkingan = async (req, res) => {
    const kandidat = await RankDatabase.findAll({
       where: { status_mundur: "N" },
       order: [
-        // Ganti baris ini agar kebal terhadap huruf kecil/besar dan spasi
         [sequelize.literal(`CASE WHEN LOWER(TRIM(kluster)) = 'afirmasi' THEN 1 ELSE 2 END`), "ASC"],
         ["nilai_akhir", "DESC"]
       ],
@@ -193,7 +187,7 @@ exports.getHasilRanking = async (req, res) => {
     if (search) {
       whereClause[Op.or] = [
         { nama: { [Op.like]: `%${search}%` } },
-        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } }, // <-- Cari berdasar kode
+        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } },
         { '$RefPerguruanTinggi.nama_pt$': { [Op.like]: `%${search}%` } },
         { '$RefProgramStudi.nama_prodi$': { [Op.like]: `%${search}%` } }
       ];
@@ -217,12 +211,12 @@ exports.getHasilRanking = async (req, res) => {
     if (filterProdi || search) {
       includeOptions.push({
         model: RefProgramStudi,
-        attributes: ['nama_prodi'],
+        attributes: ['nama_prodi', 'jenjang'],
         where: filterProdi ? { nama_prodi: { [Op.like]: `%${filterProdi}%` } } : undefined,
         required: true
       });
     } else {
-      includeOptions.push({ model: RefProgramStudi, attributes: ['nama_prodi'] });
+      includeOptions.push({ model: RefProgramStudi, attributes: ['nama_prodi', 'jenjang'] });
     }
 
     const { count, rows } = await RankDatabase.findAndCountAll({
@@ -241,7 +235,8 @@ exports.getHasilRanking = async (req, res) => {
       ...row.toJSON(),
       kode_pendaftaran: row.TrxBeasiswa ? row.TrxBeasiswa.kode_pendaftaran : "-",
       nama_pt: row.RefPerguruanTinggi ? row.RefPerguruanTinggi.nama_pt : "-",
-      nama_prodi: row.RefProgramStudi ? row.RefProgramStudi.nama_prodi : "-"
+      nama_prodi: row.RefProgramStudi ? row.RefProgramStudi.nama_prodi : "-",
+      jenjang: row.RefProgramStudi ? row.RefProgramStudi.jenjang : "-"
     }));
 
     return successResponse(res, "Berhasil memuat hasil perangkingan", {
@@ -270,7 +265,7 @@ exports.downloadHasilRankingExcel = async (req, res) => {
     if (search) {
       whereClause[Op.or] = [
         { nama: { [Op.like]: `%${search}%` } },
-        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } }, // <-- Cari berdasar kode
+        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } },
         { '$RefPerguruanTinggi.nama_pt$': { [Op.like]: `%${search}%` } },
         { '$RefProgramStudi.nama_prodi$': { [Op.like]: `%${search}%` } }
       ];
@@ -294,12 +289,12 @@ exports.downloadHasilRankingExcel = async (req, res) => {
     if (filterProdi || search) {
       includeOptions.push({
         model: RefProgramStudi,
-        attributes: ['nama_prodi'],
+        attributes: ['nama_prodi', 'jenjang'],
         where: filterProdi ? { nama_prodi: { [Op.like]: `%${filterProdi}%` } } : undefined,
         required: true
       });
     } else {
-      includeOptions.push({ model: RefProgramStudi, attributes: ['nama_prodi'] });
+      includeOptions.push({ model: RefProgramStudi, attributes: ['nama_prodi', 'jenjang'] });
     }
 
     const hasil = await RankDatabase.findAll({
@@ -317,22 +312,28 @@ exports.downloadHasilRankingExcel = async (req, res) => {
 
     worksheet.columns = [
       { header: "No", key: "no", width: 5 },
-      { header: "Kode Pendaftaran", key: "kode_pendaftaran", width: 25 }, // <-- Header Diubah
+      { header: "Kode Pendaftaran", key: "kode_pendaftaran", width: 25 },
       { header: "Nama", key: "nama", width: 30 },
       { header: "Nilai Akhir", key: "nilai", width: 15 },
       { header: "Kluster", key: "kluster", width: 15 },
+      { header: "ID PT Final", key: "id_pt", width: 15 },
       { header: "PT Final", key: "pt", width: 35 },
+      { header: "Jenjang", key: "jenjang", width: 15 },
+      { header: "ID Prodi Final", key: "id_prodi", width: 15 },
       { header: "Prodi Final", key: "prodi", width: 35 },
     ];
 
     hasil.forEach((row, index) => {
       worksheet.addRow({
         no: index + 1,
-        kode_pendaftaran: row.TrxBeasiswa ? row.TrxBeasiswa.kode_pendaftaran : "-", // <-- Value Diubah
+        kode_pendaftaran: row.TrxBeasiswa ? row.TrxBeasiswa.kode_pendaftaran : "-",
         nama: row.nama,
         nilai: row.nilai_akhir,
         kluster: row.kluster,
+        id_pt: row.id_pt || "-",
         pt: row.RefPerguruanTinggi ? row.RefPerguruanTinggi.nama_pt : "-",
+        jenjang: row.RefProgramStudi ? row.RefProgramStudi.jenjang : "-",
+        id_prodi: row.id_prodi || "-",
         prodi: row.RefProgramStudi ? row.RefProgramStudi.nama_prodi : "-"
       });
     });
@@ -397,7 +398,6 @@ exports.clearHasilRanking = async (req, res) => {
   }
 };
 
-
 exports.getAllDatabaseUpload = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -410,7 +410,7 @@ exports.getAllDatabaseUpload = async (req, res) => {
     if (search) {
       whereClause[Op.or] = [
         { nama: { [Op.like]: `%${search}%` } },
-        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } }, // <-- Cari berdasar kode
+        { '$TrxBeasiswa.kode_pendaftaran$': { [Op.like]: `%${search}%` } },
         { '$RefPerguruanTinggi.nama_pt$': { [Op.like]: `%${search}%` } },
         { '$RefProgramStudi.nama_prodi$': { [Op.like]: `%${search}%` } }
       ];
@@ -481,7 +481,6 @@ exports.updateStatusMundur = async (req, res) => {
   }
 };
 
-
 exports.getCadanganRanking = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -489,7 +488,6 @@ exports.getCadanganRanking = async (req, res) => {
     const search = req.query.search || "";
     const offset = (page - 1) * limit;
 
-    // Filter: Belum ada PT/Prodi (null) dan TIDAK mundur
     const whereClause = {
       id_pt: { [Op.is]: null },
       id_prodi: { [Op.is]: null },
@@ -540,7 +538,6 @@ exports.getSisaKuota = async (req, res) => {
     const search = req.query.search || "";
     const offset = (page - 1) * limit;
 
-    // Pastikan relasi sudah diset agar bisa search berdasarkan nama PT
     RefProgramStudi.belongsTo(RefPerguruanTinggi, { foreignKey: 'id_pt', targetKey: 'id_pt' });
 
     const whereClause = {};
@@ -551,7 +548,6 @@ exports.getSisaKuota = async (req, res) => {
       ];
     }
 
-    // 1. Ambil data master kuota dari RefProgramStudi
     const { count, rows } = await RefProgramStudi.findAndCountAll({
       where: whereClause,
       include: [{
@@ -566,7 +562,6 @@ exports.getSisaKuota = async (req, res) => {
       ]
     });
 
-    // 2. Hitung jumlah kursi terpakai dari RankDatabase yang id_pt dan id_prodi-nya terisi
     const terpakaiData = await RankDatabase.findAll({
       attributes: [
         'id_pt',
@@ -580,7 +575,6 @@ exports.getSisaKuota = async (req, res) => {
       group: ['id_pt', 'id_prodi']
     });
 
-    // 3. Ubah hasil agregasi hitungan menjadi Dictionary/Object agar aksesnya instan
     const mapTerpakai = {};
     terpakaiData.forEach(item => {
       const pt = item.id_pt;
@@ -589,7 +583,6 @@ exports.getSisaKuota = async (req, res) => {
       mapTerpakai[`${pt}-${prodi}`] = parseInt(total, 10);
     });
 
-    // 4. Format hasil gabungan (Kuota Master - Terpakai = Sisa)
     const formattedData = rows.map(row => {
       const ptId = row.id_pt;
       const prodiId = row.id_prodi;
@@ -623,12 +616,10 @@ exports.getSisaKuota = async (req, res) => {
 
 exports.getDashboardStats = async (req, res) => {
   try {
-    // 1. Data Mentah (Seluruh Data yang diupload)
     const totalDataMentah = await RankDatabase.count();
     const totalAfirmasi = await RankDatabase.count({ where: { kluster: 'Afirmasi' } });
     const totalReguler = await RankDatabase.count({ where: { kluster: 'Reguler' } });
 
-    // 2. Data Hasil Proses (Yang sudah mendapat PT & Prodi)
     const totalProses = await RankDatabase.count({
       where: { id_pt: { [Op.ne]: null }, id_prodi: { [Op.ne]: null } }
     });
@@ -639,7 +630,6 @@ exports.getDashboardStats = async (req, res) => {
       where: { id_pt: { [Op.ne]: null }, id_prodi: { [Op.ne]: null }, kluster: 'Reguler' }
     });
 
-    // 3. Data Mundur
     const totalMundur = await RankDatabase.count({ where: { status_mundur: 'Y' } });
 
     return successResponse(res, "Berhasil memuat statistik dashboard", {
@@ -661,16 +651,11 @@ exports.getDashboardStats = async (req, res) => {
   }
 };
 
-
-// ==========================================
-// Download Template Excel untuk Upload
-// ==========================================
 exports.downloadTemplateRanking = async (req, res) => {
   try {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Template Upload Ranking");
 
-    // Definisi Kolom
     worksheet.columns = [
       { header: "Kode Pendaftaran", key: "kode", width: 25 },
       { header: "Nama Lengkap", key: "nama", width: 35 },
@@ -678,21 +663,18 @@ exports.downloadTemplateRanking = async (req, res) => {
       { header: "Kluster", key: "kluster", width: 20 },
     ];
 
-    // Tambahkan 1 baris contoh (contoh cara pengisian)
     worksheet.addRow({
       kode: "2601000001",
       nama: "Contoh Nama Peserta",
       nilai: 85.50,
-      kluster: "Reguler" // atau "Afirmasi"
+      kluster: "Reguler" 
     });
 
-    // Beri catatan agar baris pertama tidak dihapus
-    worksheet.addRow(["", "", "", ""]); // baris kosong jarak
+    worksheet.addRow(["", "", "", ""]); 
     const noteRow = worksheet.addRow(["CATATAN: Hapus baris 2 (contoh data) sebelum upload. Jangan ubah urutan header di baris 1."]);
     worksheet.mergeCells(`A${noteRow.number}:D${noteRow.number}`);
     noteRow.font = { italic: true, color: { argb: "FFFF0000" } };
 
-    // Styling Header
     for (let i = 1; i <= 4; i++) {
       const cell = worksheet.getRow(1).getCell(i);
       cell.font = { bold: true };
