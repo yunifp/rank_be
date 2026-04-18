@@ -1,8 +1,8 @@
 const { DataTypes } = require("sequelize");
-const { sequelize } = require("../core/db_config");
+const { sequelizeMaster } = require("../core/db_master_config");
 const RefPerguruanTinggi = require("./RefPerguruanTinggi");
 
-const RefProgramStudi = sequelize.define(
+const RefProgramStudi = sequelizeMaster.define(
   "RefProgramStudi",
   {
     id_prodi: {

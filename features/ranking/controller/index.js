@@ -8,6 +8,7 @@ const {
   RefPerguruanTinggi,
   TrxBeasiswa
 } = require("../../../models");
+const { sequelizeMaster } = require("../../../core/db_master_config");
 const { successResponse, errorResponse, failResponse } = require("../../../common/response");
 
 RankDatabase.belongsTo(RefPerguruanTinggi, { foreignKey: "id_pt", targetKey: "id_pt" });
@@ -90,35 +91,42 @@ exports.uploadDataRanking = async (req, res) => {
 };
 
 exports.prosesPerangkingan = async (req, res) => {
-  const transaction = await sequelize.transaction();
+  const transactionLocal = await sequelize.transaction();
+  const transactionMaster = await sequelizeMaster.transaction();
+  
   try {
-    await RankDatabase.update(
-      { id_pt: null, id_prodi: null },
-      { where: {}, transaction }
-    );
+    const referensiProdi = await RefProgramStudi.findAll({ transaction: transactionMaster });
 
-    const referensiProdi = await RefProgramStudi.findAll({ transaction });
-    
     const sisaKuota = {};
+    const prodiToUpdate = {};
     referensiProdi.forEach((prodi) => {
       sisaKuota[`${prodi.id_pt}-${prodi.id_prodi}`] = prodi.kuota;
+      prodiToUpdate[`${prodi.id_pt}-${prodi.id_prodi}`] = prodi;
     });
 
-   const kandidat = await RankDatabase.findAll({
-      where: { status_mundur: "N" },
+    const kandidat = await RankDatabase.findAll({
+      where: {
+        status_mundur: "N",
+        id_pt: { [Op.is]: null },
+        id_prodi: { [Op.is]: null }
+      },
       order: [
         [sequelize.literal(`CASE WHEN LOWER(TRIM(kluster)) = 'afirmasi' THEN 1 ELSE 2 END`), "ASC"],
         ["nilai_akhir", "DESC"]
       ],
-      transaction
+      transaction: transactionLocal
     });
 
     const kandidatIds = kandidat.map(k => k.id_trx_beasiswa);
-    const semuaPilihan = await TrxPilihanProgramStudi.findAll({
-      where: { id_trx_beasiswa: { [Op.in]: kandidatIds } },
-      order: [["id", "ASC"]],
-      transaction
-    });
+
+    let semuaPilihan = [];
+    if (kandidatIds.length > 0) {
+      semuaPilihan = await TrxPilihanProgramStudi.findAll({
+        where: { id_trx_beasiswa: { [Op.in]: kandidatIds } },
+        order: [["id", "ASC"]],
+        transaction: transactionLocal
+      });
+    }
 
     const mapPilihan = {};
     semuaPilihan.forEach(p => {
@@ -130,26 +138,31 @@ exports.prosesPerangkingan = async (req, res) => {
 
     let jumlahBerhasil = 0;
     const kandidatToUpdate = [];
+    const prodiUpdates = new Set();
 
     for (let peserta of kandidat) {
       const pilihanList = mapPilihan[peserta.id_trx_beasiswa] || [];
 
       for (let pilihan of pilihanList) {
         const keyKuota = `${pilihan.id_pt}-${pilihan.id_prodi}`;
-        
+
         if (sisaKuota[keyKuota] && sisaKuota[keyKuota] > 0) {
           peserta.id_pt = pilihan.id_pt;
           peserta.id_prodi = pilihan.id_prodi;
-          
+
           kandidatToUpdate.push({
             id: peserta.id,
+            id_trx_beasiswa: peserta.id_trx_beasiswa,
             id_pt: pilihan.id_pt,
             id_prodi: pilihan.id_prodi
           });
-          
+
           sisaKuota[keyKuota] -= 1;
+          prodiToUpdate[keyKuota].kuota = sisaKuota[keyKuota];
+          prodiUpdates.add(keyKuota);
+
           jumlahBerhasil++;
-          break; 
+          break;
         }
       }
     }
@@ -157,14 +170,28 @@ exports.prosesPerangkingan = async (req, res) => {
     if (kandidatToUpdate.length > 0) {
       await RankDatabase.bulkCreate(kandidatToUpdate, {
         updateOnDuplicate: ["id_pt", "id_prodi"],
-        transaction
+        transaction: transactionLocal
       });
     }
 
-    await transaction.commit();
+    for (let key of prodiUpdates) {
+      const prodi = prodiToUpdate[key];
+      await RefProgramStudi.update(
+        { kuota: prodi.kuota },
+        { 
+          where: { id_pt: prodi.id_pt, id_prodi: prodi.id_prodi }, 
+          transaction: transactionMaster 
+        }
+      );
+    }
+
+    await transactionLocal.commit();
+    await transactionMaster.commit();
+    
     return successResponse(res, `Proses perangkingan selesai. ${jumlahBerhasil} kandidat berhasil dialokasikan.`);
   } catch (error) {
-    await transaction.rollback();
+    await transactionLocal.rollback();
+    await transactionMaster.rollback();
     console.error(error);
     return errorResponse(res, "Terjadi kesalahan saat proses perangkingan");
   }
@@ -386,14 +413,49 @@ exports.getFilterOptions = async (req, res) => {
 };
 
 exports.clearHasilRanking = async (req, res) => {
+  const transactionLocal = await sequelize.transaction();
+  const transactionMaster = await sequelizeMaster.transaction();
+  
   try {
+    const terpakaiData = await RankDatabase.findAll({
+      attributes: [
+        'id_pt',
+        'id_prodi',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total_terpakai']
+      ],
+      where: {
+        id_pt: { [Op.ne]: null },
+        id_prodi: { [Op.ne]: null }
+      },
+      group: ['id_pt', 'id_prodi'],
+      transaction: transactionLocal
+    });
+
+    for (let item of terpakaiData) {
+      const id_pt = item.id_pt;
+      const id_prodi = item.id_prodi;
+      const total_terpakai = parseInt(item.get('total_terpakai'), 10);
+
+      await RefProgramStudi.increment('kuota', {
+        by: total_terpakai,
+        where: { id_pt, id_prodi },
+        transaction: transactionMaster
+      });
+    }
+
     await RankDatabase.update(
       { id_pt: null, id_prodi: null },
-      { where: {} }
+      { where: {}, transaction: transactionLocal }
     );
+
+    await transactionLocal.commit();
+    await transactionMaster.commit();
+    
     return successResponse(res, "Hasil perangkingan berhasil dibersihkan. Data siap dirangking ulang.");
   } catch (error) {
-    console.error("Error clearHasilRanking:", error);
+    await transactionLocal.rollback();
+    await transactionMaster.rollback();
+    console.error(error);
     return errorResponse(res, "Gagal membersihkan hasil perangkingan");
   }
 };
@@ -452,31 +514,59 @@ exports.getAllDatabaseUpload = async (req, res) => {
 };
 
 exports.updateStatusMundur = async (req, res) => {
+  const transactionLocal = await sequelize.transaction();
+  const transactionMaster = await sequelizeMaster.transaction();
+  
   try {
-    const { id_trx } = req.params; 
-    const { status_mundur } = req.body; 
+    const { id_trx } = req.params;
+    const { status_mundur } = req.body;
 
-    const peserta = await RankDatabase.findOne({ 
-      where: { id_trx_beasiswa: id_trx } 
+    const peserta = await RankDatabase.findOne({
+      where: { id_trx_beasiswa: id_trx },
+      transaction: transactionLocal
     });
 
     if (!peserta) {
+      await transactionLocal.rollback();
+      await transactionMaster.rollback();
       return failResponse(res, "Data peserta tidak ditemukan");
     }
 
-    peserta.status_mundur = status_mundur;
-    
-    if (status_mundur === "Y") {
-      peserta.id_pt = null;
-      peserta.id_prodi = null;
+    if (status_mundur === "Y" && (!peserta.id_pt || !peserta.id_prodi)) {
+      await transactionLocal.rollback();
+      await transactionMaster.rollback();
+      return failResponse(res, "Set mundur hanya dapat dilakukan untuk peserta yang lolos (memiliki PT dan Prodi final), bukan cadangan.");
     }
 
-    await peserta.save();
+    if (status_mundur === "Y") {
+      if (peserta.id_pt && peserta.id_prodi) {
+        const prodi = await RefProgramStudi.findOne({
+          where: { id_pt: peserta.id_pt, id_prodi: peserta.id_prodi },
+          transaction: transactionMaster
+        });
+        if (prodi) {
+          prodi.kuota += 1;
+          await prodi.save({ transaction: transactionMaster });
+        }
+      }
+      peserta.status_mundur = "Y";
+      peserta.id_pt = null;
+      peserta.id_prodi = null;
+    } else if (status_mundur === "N") {
+      peserta.status_mundur = "N";
+    }
 
-    const pesan = status_mundur === "Y" ? "berhasil ditandai sebagai Mengundurkan Diri" : "berhasil dikembalikan statusnya";
-    return successResponse(res, `Peserta ${peserta.nama} ${pesan}. Silakan lakukan Proses Perangkingan ulang agar kuota digantikan oleh cadangan.`);
+    await peserta.save({ transaction: transactionLocal });
+    
+    await transactionLocal.commit();
+    await transactionMaster.commit();
+
+    const pesan = status_mundur === "Y" ? "berhasil ditandai sebagai Mengundurkan Diri dan kuota telah dikembalikan" : "berhasil dikembalikan statusnya menjadi cadangan";
+    return successResponse(res, `Peserta ${peserta.nama} ${pesan}. Silakan lakukan Proses Perangkingan ulang untuk mengisi kekosongan kuota.`);
   } catch (error) {
-    console.error("Error updateStatusMundur:", error);
+    await transactionLocal.rollback();
+    await transactionMaster.rollback();
+    console.error(error);
     return errorResponse(res, "Gagal mengubah status mundur peserta");
   }
 };
@@ -586,9 +676,9 @@ exports.getSisaKuota = async (req, res) => {
     const formattedData = rows.map(row => {
       const ptId = row.id_pt;
       const prodiId = row.id_prodi;
-      const kuotaMaster = row.kuota || 0;
       const terpakai = mapTerpakai[`${ptId}-${prodiId}`] || 0;
-      const sisa = kuotaMaster - terpakai;
+      const sisa = row.kuota || 0;
+      const kuotaMaster = sisa + terpakai;
 
       return {
         id_pt: ptId,
@@ -609,7 +699,7 @@ exports.getSisaKuota = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error getSisaKuota:", error);
+    console.error(error);
     return errorResponse(res, "Gagal memuat data kuota program studi");
   }
 };
