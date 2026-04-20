@@ -14,11 +14,13 @@ const {
   getCadanganRanking,
   getSisaKuota,
   getDashboardStats,
-  downloadTemplateRanking
+  downloadTemplateRanking,
+  uploadDataHasilRanking
 } = require("../controller");
 const { uploadConfigs } = require("../../../common/middleware/upload_middleware");
 
 router.post("/upload", uploadConfigs.excel.single("file"), uploadDataRanking);
+router.post("/upload-hasil", uploadConfigs.excel.single("file"), uploadDataHasilRanking);
 router.post("/proses", prosesPerangkingan);
 router.get("/hasil", getHasilRanking);
 router.get("/cadangan", getCadanganRanking); 

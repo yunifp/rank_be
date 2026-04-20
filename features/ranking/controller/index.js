@@ -52,7 +52,10 @@ exports.uploadDataRanking = async (req, res) => {
     }
 
     const beasiswaData = await TrxBeasiswa.findAll({
-      where: { kode_pendaftaran: { [Op.in]: kodeList } },
+      where: { 
+        kode_pendaftaran: { [Op.in]: kodeList },
+        id_flow: 11 
+      },
       attributes: ['id_trx_beasiswa', 'kode_pendaftaran'],
       raw: true
     });
@@ -65,7 +68,7 @@ exports.uploadDataRanking = async (req, res) => {
     const dataToInsert = [];
     rawData.forEach(item => {
       const idTrx = mapKodeToId[item.kode_pendaftaran];
-      if (idTrx) {
+      if (idTrx) { 
         dataToInsert.push({
           id_trx_beasiswa: idTrx,
           nama: item.nama,
@@ -78,7 +81,7 @@ exports.uploadDataRanking = async (req, res) => {
     });
 
     if (dataToInsert.length === 0) {
-      return failResponse(res, "Kode Pendaftaran dari Excel tidak ada yang cocok dengan Database.");
+      return failResponse(res, "Kode Pendaftaran dari Excel tidak ada yang cocok dengan Database, atau peserta tidak memiliki id_flow 11.");
     }
 
     await RankDatabase.bulkCreate(dataToInsert);
@@ -779,5 +782,158 @@ exports.downloadTemplateRanking = async (req, res) => {
   } catch (error) {
     console.error("Error download template:", error);
     return errorResponse(res, "Gagal mendownload template Excel");
+  }
+};
+
+exports.uploadDataHasilRanking = async (req, res) => {
+  try {
+    if (!req.file) return failResponse(res, "File Excel tidak ditemukan");
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(req.file.buffer);
+    const worksheet = workbook.worksheets[0];
+
+    if (!worksheet) return failResponse(res, "Sheet tidak ditemukan di dalam file Excel");
+
+    const getCellValue = (cell) => {
+      if (!cell || cell.value == null) return "";
+      if (typeof cell.value === 'object') {
+        if (cell.value.richText) return cell.value.richText.map(rt => rt.text).join("");
+        if (cell.value.result !== undefined) return cell.value.result;
+      }
+      return cell.value;
+    };
+
+    // Default mapping index sesuai screenshot (berjaga-jaga jika header beda nama)
+    let cKode = 2, cNama = 3, cNilai = 4, cKluster = 5, cIdPt = 6, cJenjang = 8, cIdProdi = 9;
+
+    // Deteksi Header Dinamis
+    const headerRow = worksheet.getRow(1);
+    headerRow.eachCell((cell, colNumber) => {
+      const val = getCellValue(cell).toString().toLowerCase().replace(/\s+/g, '');
+      if (val.includes("kodependaftaran") || val.includes("kode")) cKode = colNumber;
+      if (val.includes("nama")) cNama = colNumber;
+      // Mengatasi typo "Nila Akhir" di Excel
+      if (val.includes("nilai") || val.includes("nilaakhir")) cNilai = colNumber; 
+      if (val.includes("kluster")) cKluster = colNumber;
+      if (val.includes("idpt")) cIdPt = colNumber;
+      if (val.includes("idprodi")) cIdProdi = colNumber;
+      if (val.includes("jenjang")) cJenjang = colNumber;
+    });
+
+    const rawData = [];
+    const kodeList = [];
+
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) {
+        const kode = getCellValue(row.getCell(cKode)).toString().trim();
+        if (kode) {
+          kodeList.push(kode);
+          const rawIdPt = getCellValue(row.getCell(cIdPt));
+          const rawIdProdi = getCellValue(row.getCell(cIdProdi));
+          const rawNilai = getCellValue(row.getCell(cNilai));
+
+          const id_pt = rawIdPt ? parseInt(rawIdPt.toString().replace(/\D/g, ''), 10) : null;
+          const id_prodi = rawIdProdi ? parseInt(rawIdProdi.toString().replace(/\D/g, ''), 10) : null;
+          
+          // Replace koma menjadi titik untuk nilai (misal: 3,8 -> 3.8)
+          const nilai_akhir = rawNilai ? parseFloat(rawNilai.toString().replace(',', '.')) : 0;
+
+          rawData.push({
+            kode_pendaftaran: kode,
+            nama: getCellValue(row.getCell(cNama)).toString().trim() || "Bypass",
+            nilai_akhir: isNaN(nilai_akhir) ? 0 : nilai_akhir,
+            kluster: getCellValue(row.getCell(cKluster)).toString().trim() || "Reguler",
+            jenjang: getCellValue(row.getCell(cJenjang)).toString().trim() || null,
+            id_pt: isNaN(id_pt) ? null : id_pt,
+            id_prodi: isNaN(id_prodi) ? null : id_prodi,
+          });
+        }
+      }
+    });
+
+    if (rawData.length === 0) return failResponse(res, "Tidak ada data yang terbaca dari Excel.");
+
+    // Cari data yang sudah ada di database
+    const beasiswaData = await TrxBeasiswa.findAll({
+      where: { kode_pendaftaran: { [Op.in]: kodeList } },
+      attributes: ['id_trx_beasiswa', 'kode_pendaftaran']
+    });
+
+    const mapKodeToId = {};
+    beasiswaData.forEach(b => {
+      mapKodeToId[b.kode_pendaftaran] = b.id_trx_beasiswa;
+    });
+
+    const dataToInsert = [];
+    let berhasilDibuat = 0;
+    let berhasilDiupdate = 0;
+
+    for (let item of rawData) {
+      let idTrx = mapKodeToId[item.kode_pendaftaran];
+
+      if (!idTrx) {
+        // JIKA BELUM ADA -> CREATE BYPASS
+        try {
+          const newDummy = await TrxBeasiswa.create({
+            kode_pendaftaran: item.kode_pendaftaran,
+            nama_lengkap: item.nama,
+            nama_kluster: item.kluster,
+            jenjang_sekolah: item.jenjang,
+            jenjang_final: item.jenjang,
+            hasil_tes_seleksi: item.nilai_akhir, // Insert nilai ke tabel utama
+            id_flow: 11
+          });
+          idTrx = newDummy.id_trx_beasiswa;
+          berhasilDibuat++;
+        } catch (e) {
+          console.error("Gagal create bypass data:", e);
+        }
+      } else {
+        // JIKA SUDAH ADA -> UPDATE DATA TERSEBUT
+        try {
+          await TrxBeasiswa.update({
+            nama_lengkap: item.nama,
+            nama_kluster: item.kluster,
+            jenjang_sekolah: item.jenjang,
+            jenjang_final: item.jenjang,
+            hasil_tes_seleksi: item.nilai_akhir // Update nilai ke tabel utama
+          }, {
+            where: { id_trx_beasiswa: idTrx }
+          });
+          berhasilDiupdate++;
+        } catch (e) {
+          console.error("Gagal update data TrxBeasiswa:", e);
+        }
+      }
+
+      // Siapkan data untuk masuk ke tabel RankDatabase
+      if (idTrx) {
+        dataToInsert.push({
+          id_trx_beasiswa: idTrx,
+          nama: item.nama,
+          nilai_akhir: item.nilai_akhir,
+          kluster: item.kluster,
+          id_pt: item.id_pt,
+          id_prodi: item.id_prodi,
+          status_mundur: "N",
+          timestamp: new Date()
+        });
+      }
+    }
+
+    if (dataToInsert.length === 0) {
+      return failResponse(res, "Bypass Gagal: Tidak ada data yang bisa diinsert ke tabel perangkingan.");
+    }
+
+    // Insert / Update ke RankDatabase
+    await RankDatabase.bulkCreate(dataToInsert, {
+      updateOnDuplicate: ["id_pt", "id_prodi", "nilai_akhir", "kluster", "nama", "status_mundur", "timestamp"]
+    });
+
+    return successResponse(res, `Berhasil memproses Excel. ${berhasilDibuat} data baru dibuat, ${berhasilDiupdate} data lama diupdate.`);
+  } catch (error) {
+    console.error("Error uploadDataHasilRanking:", error);
+    return errorResponse(res, "Gagal mengupload file Excel bypass");
   }
 };

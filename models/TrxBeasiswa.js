@@ -68,6 +68,12 @@ const TrxBeasiswa = sequelize.define(
       allowNull: true,
     },
 
+    status_undur_diri: {
+      type: DataTypes.ENUM("Y", "N"),
+      allowNull: true,
+      defaultValue: "N",
+    },
+
     nkk: {
       type: DataTypes.STRING(16),
       allowNull: true,
@@ -136,6 +142,11 @@ const TrxBeasiswa = sequelize.define(
     tinggi_badan: {
       type: DataTypes.INTEGER(10),
       allowNull: true,
+    },
+    is_active: {
+      type: DataTypes.INTEGER(1),
+      allowNull: true,
+      defaultValue: 1
     },
 
     // ===== Alamat Tinggal =====
@@ -226,6 +237,7 @@ const TrxBeasiswa = sequelize.define(
     id_jenjang_sekolah: DataTypes.STRING(255),
     jenjang_sekolah: DataTypes.STRING(255),
     sekolah: DataTypes.STRING(255),
+    nisn_sekolah: DataTypes.STRING(50),
     jurusan: DataTypes.STRING(255),
     tahun_lulus: DataTypes.STRING(4),
     nama_jurusan_sekolah: DataTypes.STRING(100),
@@ -238,6 +250,7 @@ const TrxBeasiswa = sequelize.define(
     id_jalur: DataTypes.INTEGER(10),
     jalur: DataTypes.STRING(255),
     id_verifikator: DataTypes.INTEGER(11),
+    verifikator_nama: DataTypes.STRING(50),
 
     status_lulus_administrasi: DataTypes.ENUM("Y", "N"),
     status_lulus_wawancara_akademik: DataTypes.ENUM("Y", "N"),
@@ -264,13 +277,75 @@ const TrxBeasiswa = sequelize.define(
     // nama_verifikator_dinas_provinsi: DataTypes.STRING(255),
     tag_dinas_kabkot: DataTypes.ENUM("Y", "N"),
     tag_dinas_provinsi: DataTypes.ENUM("Y", "N"),
+    hasil_dinas_kabkot: DataTypes.ENUM("0", "1", "2"),
+    hasil_dinas_provinsi: DataTypes.ENUM("0", "1", "2"),
 
     tag_sktm: DataTypes.ENUM("Y", "N"),
+
+    // Tambahkan 3 kolom ini dengan tipe ENUM
+    tag_daerah_3T: {
+      type: DataTypes.ENUM("1", "0"),
+      allowNull: true,
+      defaultValue: "0",
+    },
+    tag_daerah_perbatasan: {
+      type: DataTypes.ENUM("1", "0"),
+      allowNull: true,
+      defaultValue: "0",
+    },
+    tag_papua_nusa_tenggara: {
+      type: DataTypes.ENUM("1", "0"),
+      allowNull: true,
+      defaultValue: "0",
+    },
+    tag_lock_selektor: {
+      type: DataTypes.ENUM("1", "0"),
+      allowNull: true,
+      defaultValue: "0",
+    },
+    timestamp_lock_selektor: DataTypes.DATE(),
+    id_pt_final: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    pt_final: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+    id_prodi_final: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    prodi_final: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+    urutan_ranking: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    jenjang_final: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+    },
+
+    id_kluster: {
+      type: DataTypes.TINYINT,
+      allowNull: true,
+    },
+    nama_kluster: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+    },
+    status_wawancara: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
 
     sequence: DataTypes.INTEGER(255),
     kode_pendaftaran: DataTypes.STRING(100),
     flag_kewilayahn: {
-      type: DataTypes.INTEGER(1), 
+      type: DataTypes.INTEGER(1),
       allowNull: false,
       defaultValue: 0,
     },
